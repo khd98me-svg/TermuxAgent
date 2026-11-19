@@ -269,6 +269,20 @@ class ToolCallSafetyTests(unittest.TestCase):
             agent.STOP.clear()
             agent.history.clear()
 
+    def test_tool_exception_is_reported_to_ui_and_returned(self):
+        call = {"name": "broken_tool", "args": {}}
+        with patch.dict(agent.TOOLS, {"broken_tool": lambda **kwargs: (_ for _ in ()).throw(ValueError("broken"))}):
+            with patch.object(agent, "out") as output:
+                result = agent.execute(call)
+        self.assertIn("ValueError: broken", result)
+        output.assert_any_call("err", text=result)
+
+    def test_unknown_tool_is_reported_to_ui(self):
+        with patch.object(agent, "out") as output:
+            result = agent.execute({"name": "missing_tool", "args": {}})
+        self.assertTrue(result.startswith("Error: unknown tool"))
+        output.assert_any_call("err", text=result)
+
 
 if __name__ == "__main__":
     unittest.main()
