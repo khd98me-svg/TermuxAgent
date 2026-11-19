@@ -131,6 +131,7 @@ class ProviderRetryTests(unittest.TestCase):
             agent.last_model = None
             with patch.object(agent, "eligible_names", return_value=["GROQ"]), \
                  patch.object(agent, "post_openai", return_value={"candidates": []}), \
+                 patch.object(agent, "post_retry", side_effect=lambda fn: fn()), \
                  patch.object(agent, "record_tokens"):
                 agent.call_llm([{"role": "user", "parts": [{"text": "hello"}]}])
             self.assertNotIn(key, agent.bench)
