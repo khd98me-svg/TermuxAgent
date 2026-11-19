@@ -1,4 +1,4 @@
 {
-  "id": "gpu-connection-check-001",
-  "action": "cuda_info"
+  "id": "realesrgan-smoke-20261120-001",
+  "action": "realesrgan_image_test"
 }
