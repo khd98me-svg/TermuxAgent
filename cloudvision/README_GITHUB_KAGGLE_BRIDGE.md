@@ -18,6 +18,19 @@ This branch contains the first working implementation path for CloudVision video
 
 Never paste tokens, cookies, session IDs, or Kaggle credentials into ChatGPT or commit them to this repository.
 
+## Automated launch from GitHub Actions
+
+The workflow `.github/workflows/cloudvision-kaggle-remote.yml` can queue a recorded YouTube URL, update the existing Kaggle notebook, launch it through the Kaggle CLI, wait for completion, and upload Kaggle outputs as a GitHub Actions artifact.
+
+One-time repository secrets required in **GitHub → Settings → Secrets and variables → Actions**:
+- `KAGGLE_USERNAME`: your Kaggle account username.
+- `KAGGLE_KEY`: the API key from your Kaggle account settings. Keep it in GitHub Secrets; never paste it into chat or commit it.
+- `KAGGLE_KERNEL_ID`: the full ID of the existing Kaggle notebook in `username/notebook-slug` form.
+
+Important: `KAGGLE_KERNEL_ID` must identify the same Kaggle notebook where the `GITHUB_TOKEN` Kaggle Secret is already attached. The workflow updates and runs that notebook rather than creating a new one. Kaggle GPU quota and availability still apply.
+
+After the three GitHub repository secrets are configured, use **Actions → CloudVision remote Kaggle GPU job → Run workflow**. The default diagnostic run processes 24 frames. Leave `max_frames` blank only when ready to process the entire video. The output video and reports are downloaded from the completed workflow's artifact.
+
 ## Submit a video enhancement job
 
 Create or update `cloudvision/bridge-command.json` on branch `cloudvision-kaggle-bridge` with a unique ID. For a recorded YouTube video, use `source_url`:
