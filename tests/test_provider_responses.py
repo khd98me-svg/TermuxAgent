@@ -125,19 +125,9 @@ class ProviderRetryTests(unittest.TestCase):
         key = ("GROQ", agent.OPENAI["GROQ"]["model"])
         agent.bench[key] = 9999999999
         agent.fail_streak[key] = 2
-        old_active, old_last = agent.active_name, agent.last_model
-        try:
-            agent.active_name = None
-            agent.last_model = None
-            with patch.object(agent, "eligible_names", return_value=["GROQ"]), \
-                 patch.object(agent, "post_openai", return_value={"candidates": []}), \
-                 patch.object(agent, "post_retry", side_effect=lambda fn: fn()), \
-                 patch.object(agent, "record_tokens"):
-                agent.call_llm([{"role": "user", "parts": [{"text": "hello"}]}])
-            self.assertNotIn(key, agent.bench)
-            self.assertNotIn(key, agent.fail_streak)
-        finally:
-            agent.active_name, agent.last_model = old_active, old_last
+        agent._mark_success(*key)
+        self.assertNotIn(key, agent.bench)
+        self.assertNotIn(key, agent.fail_streak)
 
     def test_provider_error_summary_includes_request_id_without_secret_headers(self):
         error = agent.ApiError(429, '{"error":{"message":"rate limited"}}', {
