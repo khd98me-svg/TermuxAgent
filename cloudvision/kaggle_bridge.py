@@ -23,15 +23,13 @@ COMMAND_PATH = "cloudvision/bridge-command.json"
 RESULT_DIR = "cloudvision/bridge-results"
 API = f"https://api.github.com/repos/{OWNER}/{REPO}"
 TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-if not TOKEN:
-    raise SystemExit("Missing GITHUB_TOKEN. Add it through Kaggle Secrets; never paste it into notebook text or chat.")
-
 SESSION = requests.Session()
-SESSION.headers.update({
-    "Authorization": f"Bearer {TOKEN}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-})
+if TOKEN:
+    SESSION.headers.update({
+        "Authorization": f"Bearer {TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
 PYTHON = sys.executable
 WORK = Path("/kaggle/working/cloudvision")
 WORK.mkdir(parents=True, exist_ok=True)
@@ -352,11 +350,51 @@ ACTIONS = {
     "video_upscale": enhance_video,
 }
 
+def run_embedded_command():
+    """Execute one command embedded by GitHub Actions; no Kaggle/GitHub secret required."""
+    raw = os.environ.get("CLOUDVISION_COMMAND_JSON", "").strip()
+    if not raw:
+        raise RuntimeError("CLOUDVISION_COMMAND_JSON is missing; this notebook must be launched by the CloudVision workflow.")
+    command = json.loads(raw)
+    if not isinstance(command, dict):
+        raise ValueError("Embedded command must be a JSON object.")
+    command_id = str(command.get("id", ""))
+    action = str(command.get("action", ""))
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
+        raise ValueError("Invalid command id")
+    if action not in ACTIONS:
+        raise ValueError(f"Action not allowed: {action}")
+    started = datetime.now(timezone.utc).isoformat()
+    try:
+        data = ACTIONS[action](command) if action == "video_upscale" else ACTIONS[action]()
+        result = {"id": command_id, "action": action, "status": "success",
+                  "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                  "data": data}
+    except Exception as exc:
+        result = {"id": command_id, "action": action, "status": "error",
+                  "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                  "error": str(exc), "traceback": traceback.format_exc()[-12000:]}
+    report = WORK / f"{command_id}_result.json"
+    report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[cloudvision] report saved: {report}", flush=True)
+    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
+    # Keep the Kaggle kernel successful so the workflow can download the diagnostic report.
+    return result
+
+
 def main():
+    if os.environ.get("CLOUDVISION_COMMAND_JSON", "").strip():
+        print("[bridge] embedded one-shot mode; no GitHub token or Kaggle Secrets required.", flush=True)
+        result = run_embedded_command()
+        if result.get("status") != "success":
+            print("[bridge] job completed with an error; see the JSON report in Kaggle outputs.", flush=True)
+        return
+
+    if not TOKEN:
+        raise SystemExit("No embedded command and no legacy GITHUB_TOKEN. Launch through CloudVision GitHub Actions.")
     once = os.environ.get("CLOUDVISION_ONCE", "").strip().lower() in {"1", "true", "yes"}
     wait_seconds = int(os.environ.get("CLOUDVISION_WAIT_SECONDS", "900")) if once else None
-    print("[bridge] one-shot mode; waiting for one CloudVision job." if once else
-          "[bridge] online; waiting for CloudVision jobs from GitHub.", flush=True)
+    print("[bridge] legacy GitHub polling mode; waiting for CloudVision jobs.", flush=True)
     print("[bridge] allowed actions: cuda_info, realesrgan_image_test, video_upscale", flush=True)
     last_id = None
     wait_started = time.time()
@@ -406,6 +444,7 @@ def main():
             if once:
                 raise
             time.sleep(30)
+
 
 if __name__ == "__main__":
     main()
