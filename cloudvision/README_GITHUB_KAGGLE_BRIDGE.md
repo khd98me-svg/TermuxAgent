@@ -10,24 +10,22 @@ This branch contains the first working implementation path for CloudVision video
 - Processed MP4 files are saved under `/kaggle/working/cloudvision/` in the Kaggle session. Video files are deliberately not committed to GitHub.
 
 ## One-time setup
-1. Open a Kaggle notebook and select **GPU T4**.
-2. For recorded YouTube videos, submit a supported HTTPS YouTube URL in `source_url`; the worker downloads it into the Kaggle session automatically. Alternatively, provide a local file under `/kaggle/input` or `/kaggle/working`.
-3. Create a GitHub fine-grained token scoped only to `khd98me-svg/TermuxAgent`, with **Contents: Read and write**.
-4. In Kaggle, open **Add-ons → Secrets** and save the token under the exact name `GITHUB_TOKEN`.
-5. Run the launcher cell from `kaggle_github_bridge.ipynb`. Keep it running while jobs are being submitted.
+1. Create a Kaggle notebook and select **GPU T4**.
+2. Configure GitHub repository secrets `KAGGLE_USERNAME`, `KAGGLE_KEY` (modern `KGAT_` API token), and `KAGGLE_KERNEL_ID`.
+3. The automated workflow embeds each job command into the private notebook revision it pushes to Kaggle. The worker does not read Kaggle Secrets and does not need a GitHub token.
 
 Never paste tokens, cookies, session IDs, or Kaggle credentials into ChatGPT or commit them to this repository.
 
 ## Automated launch from GitHub Actions
 
-The workflow `.github/workflows/cloudvision-kaggle-remote.yml` can queue a recorded YouTube URL, update the existing Kaggle notebook, launch it through the Kaggle CLI, wait for completion, and upload Kaggle outputs as a GitHub Actions artifact.
+The workflow `.github/workflows/cloudvision-kaggle-remote.yml` embeds a recorded YouTube job directly into a private Kaggle notebook revision, launches it through the Kaggle CLI, waits for completion, downloads the MP4/report outputs, uploads them as a GitHub Actions artifact, and validates the report and MP4.
 
 One-time repository secrets required in **GitHub → Settings → Secrets and variables → Actions**:
 - `KAGGLE_USERNAME`: your Kaggle account username.
 - `KAGGLE_KEY`: the API key from your Kaggle account settings. Keep it in GitHub Secrets; never paste it into chat or commit it.
 - `KAGGLE_KERNEL_ID`: the full ID of the existing Kaggle notebook in `username/notebook-slug` form.
 
-Important: `KAGGLE_KERNEL_ID` must identify the same Kaggle notebook where the `GITHUB_TOKEN` Kaggle Secret is already attached. The workflow updates and runs that notebook rather than creating a new one. Kaggle GPU quota and availability still apply.
+Important: `KAGGLE_KERNEL_ID` must identify the existing Kaggle notebook. The workflow updates and runs that notebook rather than creating a new one. Kaggle GPU quota and availability still apply. The `GITHUB_TOKEN` secret previously created in Kaggle is no longer used by this automated path; it can remain there without affecting execution.
 
 After the three GitHub repository secrets are configured, use **Actions → CloudVision remote Kaggle GPU job → Run workflow**. The default diagnostic run processes 24 frames. Leave `max_frames` blank only when ready to process the entire video. The output video and reports are downloaded from the completed workflow's artifact.
 
@@ -54,16 +52,16 @@ Parameters:
 - `crf`: 15–28; lower means higher encoded quality and larger files. Default is 18.
 - `max_frames`: optional integer for a short diagnostic run only. Omit it to process the full video.
 
-The worker can run in listener mode for manual sessions or one-shot mode for automated execution. In one-shot mode it waits up to 900 seconds for one new job, publishes the result, and exits.
+The automated workflow uses embedded one-shot mode: the command is supplied in the private notebook revision, the worker writes its JSON report and MP4 under `/kaggle/working/cloudvision`, and then exits. This path does not poll or write to GitHub from inside Kaggle.
 
 The worker:
 1. Downloads a recorded YouTube video when `source_url` is supplied, or validates a local Kaggle path, then probes dimensions, frame rate, duration, and audio.
 2. Uses the official RealESRGAN_x4plus model on CUDA, processing frames sequentially to avoid loading the entire video into RAM.
 3. Encodes the enhanced video with FFmpeg and muxes the original audio back.
 4. Saves the MP4 under `/kaggle/working/cloudvision/<job-id>_x<scale>.mp4`.
-5. Commits a JSON report to `cloudvision/bridge-results/<job-id>.json`.
+5. Saves a JSON report to `/kaggle/working/cloudvision/<job-id>_result.json`.
 
-The report includes the output path, dimensions, frame count, processing time, GPU/VRAM information, file sizes, and model-weight hash. Download the MP4 from the Kaggle notebook's Files/Output panel; the MP4 itself is not pushed to GitHub.
+The report includes the output path, dimensions, frame count, processing time, GPU/VRAM information, file sizes, and model-weight hash. GitHub Actions downloads both the report and MP4 and publishes them as a workflow artifact.
 
 ## Other supported actions
 ```json
