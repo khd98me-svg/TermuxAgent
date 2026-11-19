@@ -36,10 +36,12 @@ Create or update `cloudvision/bridge-command.json` on branch `cloudvision-kaggle
 Or use `input_path` for a file already present in Kaggle. Supply exactly one of `source_url` or `input_path`. YouTube playlists are disabled; only HTTPS URLs on youtube.com or youtu.be are accepted. The worker checks that the URL is not a currently-live or upcoming stream before downloading. Access restrictions, age gates, or videos unavailable to yt-dlp may prevent download.
 
 Parameters:
-- `scale`: 2 or 4. Start with 2 for a practical 4K output from 1080p input.
+- `scale`: 1, 2, or 4. Use 1 to preserve the source dimensions (useful for 4K sources), 2 for 2× output, or 4 for 4× output.
 - `tile`: 128, 256, 384, 512, or 0 (no tiling). Smaller tiles use less VRAM but can be slower.
 - `crf`: 15–28; lower means higher encoded quality and larger files. Default is 18.
 - `max_frames`: optional integer for a short diagnostic run only. Omit it to process the full video.
+
+The worker can run in listener mode for manual sessions or one-shot mode for automated execution. In one-shot mode it waits up to 900 seconds for one new job, publishes the result, and exits.
 
 The worker:
 1. Downloads a recorded YouTube video when `source_url` is supplied, or validates a local Kaggle path, then probes dimensions, frame rate, duration, and audio.
