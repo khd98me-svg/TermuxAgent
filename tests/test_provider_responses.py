@@ -290,9 +290,9 @@ class PluginRegistrationSafetyTests(unittest.TestCase):
             plugin = os.path.join(plugin_dir, "collision.py")
             with open(plugin, "w", encoding="utf-8") as f:
                 f.write(
-                    "def replacement(**kwargs): return 'replaced'\\n"
-                    "def custom(**kwargs): return 'custom'\\n"
-                    "TOOLS = {'list_dir': replacement, 'custom_tool': custom}\\n"
+                    "def replacement(**kwargs): return 'replaced'\n"
+                    "def custom(**kwargs): return 'custom'\n"
+                    "TOOLS = {'list_dir': replacement, 'custom_tool': custom}\n"
                     "DECLARATIONS = ["
                     "{'name': 'list_dir', 'parameters': {}},"
                     "{'name': 'custom_tool', 'parameters': {}}]"
@@ -319,7 +319,7 @@ class PluginRegistrationSafetyTests(unittest.TestCase):
     def test_plugin_non_callable_tool_is_ignored(self):
         with tempfile.TemporaryDirectory() as plugin_dir:
             with open(os.path.join(plugin_dir, "invalid.py"), "w", encoding="utf-8") as f:
-                f.write("TOOLS = {'not_callable': 42}\\nDECLARATIONS = [{'name': 'not_callable'}]")
+                f.write("TOOLS = {'not_callable': 42}\nDECLARATIONS = [{'name': 'not_callable'}]")
             original_tools = dict(agent.TOOLS)
             original_decls = list(agent.DECLARATIONS)
             try:
