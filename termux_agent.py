@@ -1174,6 +1174,10 @@ def _mark_failure(name, model, code, retry_after=None):
         bench[key] = now + SHORT_COOLDOWN
     return fs
 
+def _mark_success(name, model):
+    fail_streak.pop((name, model), None)
+    bench.pop((name, model), None)
+
 def _provider_error_summary(error):
     headers = error.headers
     parts = [f"HTTP {error.code}"]
@@ -1481,8 +1485,7 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
                             else:
                                 post = post_openai if name in OPENAI else post_gemini
                                 resp = post_retry(lambda n=name, m=model, b=body, p=post: p(n, m, b))
-                            fail_streak.pop((name, model), None)
-                            bench.pop((name, model), None)
+                            _mark_success(name, model)
                             record_tokens(name, resp)
                             last_model, last_used = mid, f"{name} · {model}"
                             active_name = name
