@@ -1463,12 +1463,10 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
         errors = []
         attempts = 0
         max_attempts = 40
-        waited_once = False
         while attempts < max_attempts:
             attempts += 1
             tried = False
-            passes = (False, True) if waited_once else (False,)
-            for ignore_bench in passes:
+            for ignore_bench in (False,):
                 for name in names:
                     if name in dead: continue
                     g_idx = GEMINI_MODELS.index(gemini_model) if gemini_model in GEMINI_MODELS else 0
@@ -1522,7 +1520,6 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
             if soonest_wait is None: break
             wait_time = min(soonest_wait + 1, 120)
             if STOP.wait(wait_time): raise KeyboardInterrupt
-            waited_once = True
         raise RuntimeError("All providers failed: " + "; ".join(errors[-6:]))
     finally:
         if saved is not None: active_name, since_rotate, pending_rotate, last_model, last_used = saved
