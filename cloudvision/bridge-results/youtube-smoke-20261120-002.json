@@ -1,0 +1,9 @@
+{
+  "id": "youtube-smoke-20261120-002",
+  "action": "video_upscale",
+  "status": "error",
+  "started_at": "2026-11-19T21:40:14.603840+00:00",
+  "finished_at": "2026-11-19T21:40:19.959715+00:00",
+  "error": "scale must be 2 or 4.",
+  "traceback": "Traceback (most recent call last):\n  File \"/kaggle/working/kaggle_bridge.py\", line 381, in main\n    data = ACTIONS[action](command) if action == \"video_upscale\" else ACTIONS[action]()\n           ~~~~~~~~~~~~~~~^^^^^^^^^\n  File \"/kaggle/working/kaggle_bridge.py\", line 235, in enhance_video\n    raise ValueError(\"scale must be 2 or 4.\")\nValueError: scale must be 2 or 4.\n"
+}
