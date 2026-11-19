@@ -353,10 +353,13 @@ ACTIONS = {
 }
 
 def main():
-    print("[bridge] online; waiting for CloudVision jobs from GitHub.", flush=True)
+    once = os.environ.get("CLOUDVISION_ONCE", "").strip().lower() in {"1", "true", "yes"}
+    wait_seconds = int(os.environ.get("CLOUDVISION_WAIT_SECONDS", "900")) if once else None
+    print("[bridge] one-shot mode; waiting for one CloudVision job." if once else
+          "[bridge] online; waiting for CloudVision jobs from GitHub.", flush=True)
     print("[bridge] allowed actions: cuda_info, realesrgan_image_test, video_upscale", flush=True)
-    print("[bridge] stop this cell with Kaggle's interrupt button.", flush=True)
     last_id = None
+    wait_started = time.time()
     while True:
         try:
             command = get_command()
@@ -370,31 +373,38 @@ def main():
                 if command_id != last_id:
                     if result_already_published(command_id):
                         print(f"[bridge] {command_id} already has a result; skipping duplicate.", flush=True)
+                        if once:
+                            raise RuntimeError(f"Result already exists for {command_id}; refusing duplicate execution.")
                         last_id = command_id
-                        time.sleep(15)
-                        continue
-                    print(f"[bridge] received {command_id}: {action}", flush=True)
-                    started = datetime.now(timezone.utc).isoformat()
-                    try:
-                        if action not in ACTIONS:
-                            raise ValueError(f"Action not allowed: {action}")
-                        data = ACTIONS[action](command) if action == "video_upscale" else ACTIONS[action]()
-                        result = {"id": command_id, "action": action, "status": "success",
-                                  "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
-                                  "data": data}
-                    except Exception as exc:
-                        result = {"id": command_id, "action": action, "status": "error",
-                                  "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
-                                  "error": str(exc), "traceback": traceback.format_exc()[-12000:]}
-                    # Do not mark a command complete until its result is safely committed.
-                    publish_result(command_id, result)
-                    last_id = command_id
+                    else:
+                        print(f"[bridge] received {command_id}: {action}", flush=True)
+                        started = datetime.now(timezone.utc).isoformat()
+                        try:
+                            if action not in ACTIONS:
+                                raise ValueError(f"Action not allowed: {action}")
+                            data = ACTIONS[action](command) if action == "video_upscale" else ACTIONS[action]()
+                            result = {"id": command_id, "action": action, "status": "success",
+                                      "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                                      "data": data}
+                        except Exception as exc:
+                            result = {"id": command_id, "action": action, "status": "error",
+                                      "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
+                                      "error": str(exc), "traceback": traceback.format_exc()[-12000:]}
+                        publish_result(command_id, result)
+                        last_id = command_id
+                        if once:
+                            print("[bridge] one-shot job finished; exiting.", flush=True)
+                            break
+            if once and time.time() - wait_started >= wait_seconds:
+                raise TimeoutError(f"No new CloudVision job received within {wait_seconds} seconds.")
             time.sleep(15)
         except KeyboardInterrupt:
             print("[bridge] stopped by user.", flush=True)
             break
         except Exception as exc:
             print(f"[bridge] polling/publish error: {exc}", flush=True)
+            if once:
+                raise
             time.sleep(30)
 
 if __name__ == "__main__":
