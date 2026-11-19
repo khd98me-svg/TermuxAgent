@@ -1943,11 +1943,26 @@ def run_turn(user_text):
         out("log", text=f"Stopped after {max_steps} steps.")
         if WEB: WEB.push("need_continue")
     except KeyboardInterrupt:
+        # Keep a valid, auditable turn boundary. Tool side effects may already
+        # have happened before STOP was observed, so never erase the user request
+        # or leave an unmatched model tool-call message in persisted history.
         del history[start_len:]
+        history.append({"role": "user", "parts": [{"text": user_text}]})
+        stopped = (
+            "Turn stopped by the user. Some actions may already have completed "
+            "before the stop was observed; inspect the workspace and use Undo "
+            "or rollback if needed."
+        )
+        history.append({"role": "model", "parts": [{"text": stopped}]})
+        out("stopped", text=stopped)
+        log_line("turn interrupted by user; partial tool side effects may have occurred")
     except Exception as e:
         del history[start_len:]
-        out("err", text=str(e))
-        log_line(f"turn error: {e}")
+        history.append({"role": "user", "parts": [{"text": user_text}]})
+        failure = f"Turn failed before completion: {type(e).__name__}: {e}"
+        history.append({"role": "model", "parts": [{"text": failure}]})
+        out("err", text=failure)
+        log_line(f"turn error: {type(e).__name__}: {e}")
     finally:
         save_session()
         if completed_cleanly and CFG.get("notify_on_done", True):
