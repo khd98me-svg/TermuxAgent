@@ -193,5 +193,55 @@ class MakeDirectoryApprovalTests(unittest.TestCase):
             self.assertTrue(os.path.isdir(target))
 
 
+class ToolCallSafetyTests(unittest.TestCase):
+    def test_malformed_json_arguments_are_marked_and_blocked(self):
+        result = agent.from_openai({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "list_dir", "arguments": "{not-json"}
+            }]}}]
+        })
+        call = result["candidates"][0]["content"]["parts"][0]["functionCall"]
+        self.assertTrue(call["invalidArguments"])
+        with patch.dict(agent.TOOLS, {"list_dir": lambda **kwargs: self.fail("tool must not execute")}):
+            with patch.object(agent, "out"), patch.object(agent, "log_line"):
+                message = agent.execute(call)
+        self.assertIn("execution was blocked", message)
+
+    def test_non_object_json_arguments_are_marked_invalid(self):
+        result = agent.from_openai({
+            "choices": [{"message": {"tool_calls": [{
+                "function": {"name": "list_dir", "arguments": '["unexpected", "array"]'}
+            }]}}]
+        })
+        call = result["candidates"][0]["content"]["parts"][0]["functionCall"]
+        self.assertTrue(call["invalidArguments"])
+        self.assertEqual(call["args"], {})
+
+    def test_stop_prevents_later_tools_in_same_batch(self):
+        agent.history.clear()
+        agent.STOP.clear()
+        response = {"candidates": [{
+            "content": {"role": "model", "parts": [
+                {"functionCall": {"name": "first_tool", "args": {}}},
+                {"functionCall": {"name": "second_tool", "args": {}}},
+            ]}
+        }]}
+        calls = []
+        def fake_execute(call):
+            calls.append(call["name"])
+            agent.STOP.set()
+            return "first completed"
+        try:
+            with patch.object(agent, "call_llm", return_value=response), \
+                 patch.object(agent, "execute", side_effect=fake_execute), \
+                 patch.object(agent, "save_session"):
+                agent.run_turn("stop during tool batch")
+            self.assertEqual(calls, ["first_tool"])
+            self.assertEqual(agent.history, [])
+        finally:
+            agent.STOP.clear()
+            agent.history.clear()
+
+
 if __name__ == "__main__":
     unittest.main()
