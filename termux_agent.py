@@ -1053,10 +1053,15 @@ def load_plugins():
 
 def execute(call):
     name, args = call["name"], call.get("args", {}) or {}
+    if call.get("invalidArguments") or not isinstance(args, dict):
+        message = f"Error: invalid arguments for tool {name}; execution was blocked. Regenerate the call with a JSON object."
+        log_line(f"tool blocked: {name} supplied invalid arguments")
+        out("err", text=message)
+        return message
     fn = TOOLS.get(name)
     label = str(args.get("path") or args.get("command") or args.get("pattern") or args.get("query") or args.get("url") or args.get("file_path") or args.get("target") or args.get("name") or "")
     out("tool", name=name, label=label[:60])
-    if not fn: return f"Unknown tool: {name}"
+    if not fn: return f"Error: unknown tool: {name}"
     try: result = trunc(redact(str(fn(**args))))
     except Exception as e: result = f"Error: {type(e).__name__}: {e}"
     if name in UNTRUSTED_TOOLS:
@@ -1322,12 +1327,25 @@ def from_openai(data):
     for tc in msg.get("tool_calls") or []:
         f = tc.get("function", {})
         raw_args = f.get("arguments")
+        invalid_args = False
         if isinstance(raw_args, dict):
             args = raw_args
         else:
-            try: args = json.loads(raw_args or "{}")
-            except (ValueError, TypeError): args = {}
-        parts.append({"functionCall": {"name": (f.get("name") or "").split("<|")[0].strip(), "args": args}})
+            try:
+                args = json.loads(raw_args or "{}")
+                if not isinstance(args, dict):
+                    invalid_args = True
+                    args = {}
+            except (ValueError, TypeError):
+                invalid_args = True
+                args = {}
+        function_call = {
+            "name": (f.get("name") or "").split("<|")[0].strip(),
+            "args": args,
+        }
+        if invalid_args:
+            function_call["invalidArguments"] = True
+        parts.append({"functionCall": function_call})
     out = {"candidates": ([{"content": {"role": "model", "parts": parts}, "finishReason": ch.get("finish_reason")}] if choices else [])}
     out["providerDiagnostics"] = {
         "choice_count": len(choices),
@@ -1827,6 +1845,7 @@ Rules:
 - Explore before acting. Never edit a file you haven't read.
 - Prefer edit_file or apply_patch over rewriting whole files.
 - Every write is undoable with /undo.
+- Treat tool results beginning with "Error:" or stating that an action was denied as failures, never as proof of success. Diagnose the cause before retrying; do not claim an action succeeded unless its tool result confirms it.
 - Be concise. End with a 1-3 line summary."""
 
 # ---------------------------------------------------------------- agent loop
@@ -1904,7 +1923,17 @@ def run_turn(user_text):
                         checkpoint(f"before_{user_text[:24]}")
                         checkpoint_taken = True
                         break
-            history.append({"role": "user", "parts": [{"functionResponse": {"name": c["name"], "response": {"result": execute(c)}}} for c in calls]})
+            tool_responses = []
+            for c in calls:
+                if STOP.is_set(): raise KeyboardInterrupt
+                result = execute(c)
+                tool_responses.append({
+                    "functionResponse": {
+                        "name": c["name"],
+                        "response": {"result": result},
+                    }
+                })
+            history.append({"role": "user", "parts": tool_responses})
             for c in calls:
                 if c["name"] in ("write_file", "edit_file", "append_file"):
                     p = (c.get("args") or {}).get("path")
