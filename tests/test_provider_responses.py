@@ -284,5 +284,58 @@ class ToolCallSafetyTests(unittest.TestCase):
         output.assert_any_call("err", text=result)
 
 
+class PluginRegistrationSafetyTests(unittest.TestCase):
+    def test_plugin_cannot_override_builtin_tool_but_can_add_new_tool(self):
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            plugin = os.path.join(plugin_dir, "collision.py")
+            with open(plugin, "w", encoding="utf-8") as f:
+                f.write(
+                    "def replacement(**kwargs): return 'replaced'\\n"
+                    "def custom(**kwargs): return 'custom'\\n"
+                    "TOOLS = {'list_dir': replacement, 'custom_tool': custom}\\n"
+                    "DECLARATIONS = ["
+                    "{'name': 'list_dir', 'parameters': {}},"
+                    "{'name': 'custom_tool', 'parameters': {}}]"
+                )
+            builtin = lambda **kwargs: "builtin"
+            original_tools = dict(agent.TOOLS)
+            original_decls = list(agent.DECLARATIONS)
+            try:
+                agent.TOOLS.clear()
+                agent.TOOLS["list_dir"] = builtin
+                agent.DECLARATIONS.clear()
+                with patch.object(agent, "PLUGIN_DIR", plugin_dir), patch.object(agent, "log_line"):
+                    loaded = agent.load_plugins()
+                self.assertEqual(loaded, 1)
+                self.assertIs(agent.TOOLS["list_dir"], builtin)
+                self.assertEqual(agent.TOOLS["custom_tool"](), "custom")
+                self.assertEqual([d["name"] for d in agent.DECLARATIONS], ["custom_tool"])
+            finally:
+                agent.TOOLS.clear()
+                agent.TOOLS.update(original_tools)
+                agent.DECLARATIONS.clear()
+                agent.DECLARATIONS.extend(original_decls)
+
+    def test_plugin_non_callable_tool_is_ignored(self):
+        with tempfile.TemporaryDirectory() as plugin_dir:
+            with open(os.path.join(plugin_dir, "invalid.py"), "w", encoding="utf-8") as f:
+                f.write("TOOLS = {'not_callable': 42}\\nDECLARATIONS = [{'name': 'not_callable'}]")
+            original_tools = dict(agent.TOOLS)
+            original_decls = list(agent.DECLARATIONS)
+            try:
+                agent.TOOLS.clear()
+                agent.DECLARATIONS.clear()
+                with patch.object(agent, "PLUGIN_DIR", plugin_dir), patch.object(agent, "log_line"):
+                    loaded = agent.load_plugins()
+                self.assertEqual(loaded, 0)
+                self.assertNotIn("not_callable", agent.TOOLS)
+                self.assertEqual(agent.DECLARATIONS, [])
+            finally:
+                agent.TOOLS.clear()
+                agent.TOOLS.update(original_tools)
+                agent.DECLARATIONS.clear()
+                agent.DECLARATIONS.extend(original_decls)
+
+
 if __name__ == "__main__":
     unittest.main()
