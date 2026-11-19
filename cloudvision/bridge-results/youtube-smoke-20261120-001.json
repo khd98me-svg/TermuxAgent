@@ -1,0 +1,9 @@
+{
+  "id": "youtube-smoke-20261120-001",
+  "action": "video_upscale",
+  "status": "error",
+  "started_at": "2026-11-19T21:39:03.234589+00:00",
+  "finished_at": "2026-11-19T21:39:12.064025+00:00",
+  "error": "Requested output 7680x4320 exceeds the 4K pixel budget. Use scale=2 or a smaller source.",
+  "traceback": "Traceback (most recent call last):\n  File \"/kaggle/working/kaggle_bridge.py\", line 381, in main\n    data = ACTIONS[action](command) if action == \"video_upscale\" else ACTIONS[action]()\n           ~~~~~~~~~~~~~~~^^^^^^^^^\n  File \"/kaggle/working/kaggle_bridge.py\", line 246, in enhance_video\n    raise ValueError(f\"Requested output {out_w}x{out_h} exceeds the 4K pixel budget. Use scale=2 or a smaller source.\")\nValueError: Requested output 7680x4320 exceeds the 4K pixel budget. Use scale=2 or a smaller source.\n"
+}
