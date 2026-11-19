@@ -359,6 +359,7 @@ function ev(e){
  else if(e.type=="tool")add("t",`<b>${esc(e.name)}</b> ${esc(e.label)}`);
  else if(e.type=="log")add("l",esc(e.text));
  else if(e.type=="err")add("err",esc(e.text.slice(0,400)));
+ else if(e.type=="stopped")add("err","Stopped · "+esc(e.text.slice(0,400)));
  else if(e.type=="clear"){[...$("feed").children].forEach(n=>n.id!="typing"&&n.remove())}
  else if(e.type=="todos")renderTodos(e.items);
  else if(e.type=="checkpoints"){S.manual_refs=e.items||[];renderCkpts()}
