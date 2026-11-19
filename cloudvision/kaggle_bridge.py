@@ -148,7 +148,7 @@ def load_upscaler(tile):
 
 def validate_video_path(raw_path):
     if not isinstance(raw_path, str) or not raw_path.strip():
-        raise ValueError("Provide input_path, for example /kaggle/input/my-video/video.mp4")
+        raise ValueError("Provide input_path or a supported YouTube source_url.")
     path = Path(raw_path).expanduser().resolve()
     allowed_roots = [Path("/kaggle/input").resolve(), Path("/kaggle/working").resolve()]
     if not any(path == root or root in path.parents for root in allowed_roots):
@@ -156,6 +156,38 @@ def validate_video_path(raw_path):
     if not path.is_file():
         raise FileNotFoundError(f"Video file not found: {path}")
     return path
+
+def download_youtube_video(source_url, command_id):
+    from urllib.parse import urlparse
+    import yt_dlp
+
+    if not isinstance(source_url, str) or not source_url.strip():
+        raise ValueError("source_url must be a YouTube video URL.")
+    parsed = urlparse(source_url.strip())
+    allowed_hosts = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"}
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in allowed_hosts:
+        raise ValueError("Only HTTPS URLs from youtube.com or youtu.be are accepted.")
+    output_dir = WORK / "downloads" / command_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    options = {
+        "format": "bv*+ba/b",
+        "merge_output_format": "mp4",
+        "outtmpl": str(output_dir / "source.%(ext)s"),
+        "noplaylist": True,
+        "quiet": False,
+        "no_warnings": True,
+        "overwrites": True,
+    }
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(source_url.strip(), download=False)
+        if info.get("is_live") or info.get("live_status") in {"is_live", "is_upcoming"}:
+            raise ValueError("This URL is a live/upcoming stream. This worker currently accepts recorded YouTube videos; live capture needs a separate streaming pipeline.")
+        ydl.download([source_url.strip()])
+    candidates = sorted(output_dir.glob("source.*"))
+    candidates = [p for p in candidates if p.is_file() and p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov"}]
+    if not candidates:
+        raise RuntimeError("yt-dlp finished but no supported video file was found.")
+    return candidates[0]
 
 def probe_video(path):
     result = subprocess.run(
@@ -181,11 +213,20 @@ def enhance_video(command):
     import numpy as np
     import torch
 
-    allowed_keys = {"id", "action", "input_path", "scale", "tile", "max_frames", "crf"}
+    allowed_keys = {"id", "action", "input_path", "source_url", "scale", "tile", "max_frames", "crf"}
     extra = set(command) - allowed_keys
     if extra:
         raise ValueError(f"Unsupported command fields: {sorted(extra)}")
-    source = validate_video_path(command.get("input_path"))
+    input_path = command.get("input_path")
+    source_url = command.get("source_url")
+    if bool(input_path) == bool(source_url):
+        raise ValueError("Provide exactly one of input_path or source_url.")
+    command_id = command["id"]
+    if source_url:
+        run_cmd([PYTHON, "-m", "pip", "install", "-q", "-U", "yt-dlp"])
+        source = download_youtube_video(source_url, command_id)
+    else:
+        source = validate_video_path(input_path)
     scale = command.get("scale", 2)
     tile = command.get("tile", 256)
     max_frames = command.get("max_frames")
@@ -206,7 +247,6 @@ def enhance_video(command):
     # Validate the command and source before installing the AI stack.
     install_realesrgan()
     upsampler, weights = load_upscaler(tile)
-    command_id = command["id"]
     output = WORK / f"{command_id}_x{scale}.mp4"
     silent = WORK / f"{command_id}_video_only.mp4"
     decode_args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source), "-map", "0:v:0"]
