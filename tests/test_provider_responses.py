@@ -171,11 +171,11 @@ class MakeDirectoryApprovalTests(unittest.TestCase):
     def test_directory_creation_is_refused_without_approval(self):
         with tempfile.TemporaryDirectory() as root:
             target = os.path.join(root, "new-folder")
-            with patch.object(agent, "ROOT", root), \\
-                 patch.object(agent, "ask", return_value=False) as ask, \\
-                 patch.object(agent, "schedule_repo_map_refresh"), \\
-                 patch.object(agent, "journal", []):
-                result = agent.t_make_dir("new-folder")
+            with patch.object(agent, "ROOT", root):
+                with patch.object(agent, "ask", return_value=False) as ask:
+                    with patch.object(agent, "schedule_repo_map_refresh"):
+                        with patch.object(agent, "journal", []):
+                            result = agent.t_make_dir("new-folder")
             ask.assert_called_once()
             self.assertIn("denied", result.lower())
             self.assertFalse(os.path.exists(target))
@@ -183,11 +183,11 @@ class MakeDirectoryApprovalTests(unittest.TestCase):
     def test_directory_creation_proceeds_after_approval(self):
         with tempfile.TemporaryDirectory() as root:
             target = os.path.join(root, "new-folder")
-            with patch.object(agent, "ROOT", root), \\
-                 patch.object(agent, "ask", return_value=True) as ask, \\
-                 patch.object(agent, "schedule_repo_map_refresh"), \\
-                 patch.object(agent, "journal", []):
-                result = agent.t_make_dir("new-folder")
+            with patch.object(agent, "ROOT", root):
+                with patch.object(agent, "ask", return_value=True) as ask:
+                    with patch.object(agent, "schedule_repo_map_refresh"):
+                        with patch.object(agent, "journal", []):
+                            result = agent.t_make_dir("new-folder")
             ask.assert_called_once()
             self.assertIn("Created", result)
             self.assertTrue(os.path.isdir(target))
