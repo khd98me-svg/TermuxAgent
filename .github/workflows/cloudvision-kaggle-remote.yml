@@ -1,0 +1,152 @@
+name: CloudVision remote Kaggle GPU job
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: Recorded YouTube video URL
+        required: true
+        type: string
+      scale:
+        description: Output scale (1 preserves source dimensions)
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "4"
+      max_frames:
+        description: Diagnostic frame limit (24 for smoke test; blank for full video)
+        required: false
+        default: "24"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  run-kaggle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout CloudVision branch
+        uses: actions/checkout@v4
+        with:
+          ref: cloudvision-kaggle-bridge
+          fetch-depth: 0
+
+      - name: Validate required Kaggle credentials
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
+        run: |
+          test -n "$KAGGLE_USERNAME" || (echo "Missing repository secret KAGGLE_USERNAME" && exit 1)
+          test -n "$KAGGLE_KEY" || (echo "Missing repository secret KAGGLE_KEY" && exit 1)
+          test -n "$KAGGLE_KERNEL_ID" || (echo "Missing repository secret KAGGLE_KERNEL_ID" && exit 1)
+
+      - name: Create unique GitHub job command
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          SCALE: ${{ inputs.scale }}
+          MAX_FRAMES: ${{ inputs.max_frames }}
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          python - <<'PY'
+          import json, os
+          command = {
+              "id": "remote-" + os.environ["RUN_ID"],
+              "action": "video_upscale",
+              "source_url": os.environ["SOURCE_URL"].strip(),
+              "scale": int(os.environ["SCALE"]),
+              "tile": 256,
+              "crf": 18,
+          }
+          limit = os.environ.get("MAX_FRAMES", "").strip()
+          if limit:
+              command["max_frames"] = int(limit)
+          with open("cloudvision/bridge-command.json", "w", encoding="utf-8") as f:
+              json.dump(command, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          print("Created CloudVision command:", command["id"])
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloudvision/bridge-command.json
+          git commit -m "Queue remote CloudVision job ${{ github.run_id }}" || true
+          git push origin HEAD:cloudvision-kaggle-bridge
+
+      - name: Install Kaggle CLI and prepare notebook package
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
+        run: |
+          python -m pip install --quiet kaggle
+          mkdir -p cloudvision/remote-kernel
+          cp cloudvision/kaggle_github_bridge.ipynb cloudvision/remote-kernel/
+          python - <<'PY'
+          import json, os
+          metadata = {
+              "id": os.environ["KAGGLE_KERNEL_ID"],
+              "title": "CloudVision GPU Worker",
+              "code_file": "kaggle_github_bridge.ipynb",
+              "language": "python",
+              "kernel_type": "notebook",
+              "is_private": True,
+              "enable_gpu": True,
+              "enable_internet": True,
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+          }
+          with open("cloudvision/remote-kernel/kernel-metadata.json", "w") as f:
+              json.dump(metadata, f, indent=2)
+          PY
+
+      - name: Launch the existing Kaggle GPU notebook
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          kaggle kernels push -p cloudvision/remote-kernel
+
+      - name: Wait for Kaggle execution
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
+        run: |
+          for attempt in $(seq 1 90); do
+            status="$(kaggle kernels status "$KAGGLE_KERNEL_ID" 2>&1 || true)"
+            echo "$status"
+            if echo "$status" | grep -qiE 'COMPLETE|KernelWorkerStatus.COMPLETE'; then
+              exit 0
+            fi
+            if echo "$status" | grep -qiE 'ERROR|CANCELLED|FAILED'; then
+              echo "Kaggle kernel failed."
+              exit 1
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for Kaggle kernel."
+          exit 1
+
+      - name: Download Kaggle outputs
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
+        run: |
+          mkdir -p cloudvision-output
+          kaggle kernels output "$KAGGLE_KERNEL_ID" -p cloudvision-output
+          find cloudvision-output -maxdepth 2 -type f -printf '%p %s bytes\n'
+
+      - name: Upload processed video and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudvision-${{ github.run_id }}
+          path: cloudvision-output/**
+          if-no-files-found: error
+          retention-days: 7
