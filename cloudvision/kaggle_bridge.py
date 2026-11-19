@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""CloudVision Kaggle bridge. Only fixed, allow-listed actions are executable."""
+"""CloudVision Kaggle worker: controlled video enhancement over a GitHub command queue."""
 import base64
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 import traceback
 from datetime import datetime, timezone
+from fractions import Fraction
+from pathlib import Path
 
 import requests
 
@@ -30,6 +33,8 @@ SESSION.headers.update({
     "X-GitHub-Api-Version": "2022-11-28",
 })
 PYTHON = sys.executable
+WORK = Path("/kaggle/working/cloudvision")
+WORK.mkdir(parents=True, exist_ok=True)
 
 def github_get(path):
     response = SESSION.get(f"{API}/{path}", params={"ref": BRANCH}, timeout=30)
@@ -51,48 +56,50 @@ def publish_result(command_id, payload):
     encoded = base64.b64encode(body.encode("utf-8")).decode("ascii")
     response = SESSION.put(
         f"{API}/contents/{path}",
-        json={
-            "message": f"CloudVision bridge result {command_id}",
-            "content": encoded,
-            "branch": BRANCH,
-        },
-        timeout=30,
+        json={"message": f"CloudVision result {command_id}", "content": encoded, "branch": BRANCH},
+        timeout=60,
     )
     response.raise_for_status()
     print(f"[bridge] result published: {path}", flush=True)
 
-def run_cmd(args):
-    print("+", " ".join(args), flush=True)
-    subprocess.run(args, check=True)
+def run_cmd(args, **kwargs):
+    print("+", " ".join(map(str, args)), flush=True)
+    return subprocess.run(args, check=True, **kwargs)
+
+def require_ffmpeg():
+    for executable in ("ffmpeg", "ffprobe"):
+        if not shutil.which(executable):
+            raise RuntimeError(f"{executable} is unavailable in this Kaggle image.")
 
 def cuda_info():
     import torch
+    available = torch.cuda.is_available()
     return {
         "torch": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
+        "cuda_available": available,
         "cuda_version": torch.version.cuda,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "vram_gib": round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2) if torch.cuda.is_available() else None,
+        "gpu": torch.cuda.get_device_name(0) if available else None,
+        "vram_gib": round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2) if available else None,
     }
 
 def install_realesrgan():
     import torch
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable. Set Kaggle Accelerator to GPU T4 and restart the session.")
-    run_cmd([PYTHON, "-m", "pip", "install", "-q", "numpy==2.3.5", "opencv-python-headless==4.11.0.86",
-             "addict", "future", "lmdb", "Pillow", "PyYAML", "requests", "scikit-image", "scipy",
-             "tqdm", "yapf", "cython", "tensorboard"])
-    for path, url in [
-        ("/kaggle/working/BasicSR", "https://github.com/XPixelGroup/BasicSR.git"),
-        ("/kaggle/working/Real-ESRGAN", "https://github.com/xinntao/Real-ESRGAN.git"),
+        raise RuntimeError("CUDA is unavailable. Select GPU T4 in Kaggle and restart the session.")
+    require_ffmpeg()
+    # Keep Kaggle's preinstalled Torch, TorchVision, NumPy and OpenCV. Install only
+    # the Python dependencies required by the pinned Real-ESRGAN source versions.
+    run_cmd([PYTHON, "-m", "pip", "install", "-q", "addict", "future", "lmdb", "Pillow",
+             "PyYAML", "requests", "scikit-image", "scipy", "tqdm", "yapf", "cython", "tensorboard"])
+    for path, url, tag in [
+        ("/kaggle/working/BasicSR", "https://github.com/XPixelGroup/BasicSR.git", "v1.4.2"),
+        ("/kaggle/working/Real-ESRGAN", "https://github.com/xinntao/Real-ESRGAN.git", "v0.3.0"),
     ]:
         if not os.path.isdir(path):
-            tag = "v1.4.2" if path.endswith("BasicSR") else "v0.3.0"
             run_cmd(["git", "clone", "-q", "--depth", "1", "--branch", tag, url, path])
-
-    # Patch the legacy version loader for modern Python.
-    for path in ["/kaggle/working/BasicSR/setup.py", "/kaggle/working/Real-ESRGAN/setup.py"]:
-        with open(path, "r", encoding="utf-8") as handle:
+    # Fix legacy setup.py version lookup under current Python.
+    for setup_path in ("/kaggle/working/BasicSR/setup.py", "/kaggle/working/Real-ESRGAN/setup.py"):
+        with open(setup_path, "r", encoding="utf-8") as handle:
             source = handle.read()
         old = """def get_version():
     with open(version_file, 'r') as f:
@@ -105,18 +112,16 @@ def install_realesrgan():
     return namespace['__version__']"""
         if old in source:
             source = source.replace(old, new)
-            with open(path, "w", encoding="utf-8") as handle:
+            with open(setup_path, "w", encoding="utf-8") as handle:
                 handle.write(source)
         elif "namespace = {}" not in source:
-            raise RuntimeError(f"Unexpected get_version() implementation in {path}")
-
+            raise RuntimeError(f"Unexpected get_version() implementation in {setup_path}")
     run_cmd([PYTHON, "-m", "pip", "install", "-q", "--no-build-isolation", "--no-deps", "/kaggle/working/BasicSR"])
     run_cmd([PYTHON, "-m", "pip", "install", "-q", "--no-build-isolation", "--no-deps", "/kaggle/working/Real-ESRGAN"])
 
-def realesrgan_image_test():
-    install_realesrgan()
+def load_upscaler(tile):
+    import sys
     import types
-    import numpy as np
     import torch
     try:
         import torchvision.transforms.functional_tensor
@@ -125,74 +130,198 @@ def realesrgan_image_test():
         shim = types.ModuleType("torchvision.transforms.functional_tensor")
         shim.rgb_to_grayscale = TF.rgb_to_grayscale
         sys.modules["torchvision.transforms.functional_tensor"] = shim
-
-    from PIL import Image, ImageDraw
     from basicsr.archs.rrdbnet_arch import RRDBNet
     from realesrgan import RealESRGANer
+    weights = WORK / "RealESRGAN_x4plus.pth"
+    if not weights.exists():
+        url = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+        print("[cloudvision] downloading official RealESRGAN_x4plus weights", flush=True)
+        response = requests.get(url, timeout=240)
+        response.raise_for_status()
+        weights.write_bytes(response.content)
+    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+    return RealESRGANer(scale=4, model_path=str(weights), model=model, tile=tile,
+                        tile_pad=10, pre_pad=0, half=True, device=torch.device("cuda:0")), weights
 
+def validate_video_path(raw_path):
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("Provide input_path, for example /kaggle/input/my-video/video.mp4")
+    path = Path(raw_path).expanduser().resolve()
+    allowed_roots = [Path("/kaggle/input").resolve(), Path("/kaggle/working").resolve()]
+    if not any(path == root or root in path.parents for root in allowed_roots):
+        raise ValueError("input_path must be inside /kaggle/input or /kaggle/working.")
+    if not path.is_file():
+        raise FileNotFoundError(f"Video file not found: {path}")
+    return path
+
+def probe_video(path):
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
+        check=True, capture_output=True, text=True
+    )
+    data = json.loads(result.stdout)
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    if not video:
+        raise RuntimeError("No video stream found in input file.")
+    fps_text = video.get("avg_frame_rate") or video.get("r_frame_rate") or "0/1"
+    fps = float(Fraction(fps_text))
+    if not (0 < fps <= 240):
+        raise RuntimeError(f"Unsupported or invalid video frame rate: {fps_text}")
+    return {
+        "width": int(video["width"]), "height": int(video["height"]), "fps": fps,
+        "fps_text": fps_text, "duration": float(data.get("format", {}).get("duration", 0) or 0),
+        "has_audio": any(s.get("codec_type") == "audio" for s in data.get("streams", [])),
+        "codec": video.get("codec_name"),
+    }
+
+def enhance_video(command):
+    import numpy as np
+    import torch
+
+    allowed_keys = {"id", "action", "input_path", "scale", "tile", "max_frames", "crf"}
+    extra = set(command) - allowed_keys
+    if extra:
+        raise ValueError(f"Unsupported command fields: {sorted(extra)}")
+    source = validate_video_path(command.get("input_path"))
+    scale = command.get("scale", 2)
+    tile = command.get("tile", 256)
+    max_frames = command.get("max_frames")
+    crf = command.get("crf", 18)
+    if scale not in (2, 4):
+        raise ValueError("scale must be 2 or 4.")
+    if tile not in (128, 256, 384, 512, 0):
+        raise ValueError("tile must be 128, 256, 384, 512, or 0 (no tiling).")
+    if max_frames is not None and (not isinstance(max_frames, int) or not 1 <= max_frames <= 100000):
+        raise ValueError("max_frames must be an integer from 1 to 100000.")
+    if not isinstance(crf, int) or not 15 <= crf <= 28:
+        raise ValueError("crf must be an integer from 15 to 28.")
+    require_ffmpeg()
+    info = probe_video(source)
+    out_w, out_h = info["width"] * scale, info["height"] * scale
+    if out_w * out_h > 3840 * 2160:
+        raise ValueError(f"Requested output {out_w}x{out_h} exceeds the 4K pixel budget. Use scale=2 or a smaller source.")
+    upsampler, weights = load_upscaler(tile)
+    command_id = command["id"]
+    output = WORK / f"{command_id}_x{scale}.mp4"
+    silent = WORK / f"{command_id}_video_only.mp4"
+    decode = subprocess.Popen(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source), "-map", "0:v:0",
+         "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    encode = subprocess.Popen(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-f", "rawvideo",
+         "-pix_fmt", "bgr24", "-s", f"{out_w}x{out_h}", "-r", info["fps_text"],
+         "-i", "pipe:0", "-an", "-c:v", "libx264", "-preset", "veryfast",
+         "-crf", str(crf), "-pix_fmt", "yuv420p", str(silent)],
+        stdin=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    frame_bytes = info["width"] * info["height"] * 3
+    processed = 0
+    started = time.time()
+    try:
+        while True:
+            raw = decode.stdout.read(frame_bytes)
+            if not raw:
+                break
+            if len(raw) != frame_bytes:
+                raise RuntimeError("Incomplete decoded frame received from FFmpeg.")
+            if max_frames is not None and processed >= max_frames:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape(info["height"], info["width"], 3)
+            enhanced, _ = upsampler.enhance(frame, outscale=scale)
+            if enhanced.shape[1] != out_w or enhanced.shape[0] != out_h:
+                raise RuntimeError(f"Unexpected enhanced frame dimensions: {enhanced.shape}")
+            encode.stdin.write(enhanced.tobytes())
+            processed += 1
+            if processed % 50 == 0:
+                print(f"[cloudvision] processed {processed} frames; elapsed {time.time()-started:.1f}s", flush=True)
+        encode.stdin.close()
+        decode.stdout.close()
+        encode.wait()
+        decode.wait()
+        if encode.returncode != 0:
+            raise RuntimeError("FFmpeg video encoder failed: " + encode.stderr.read().decode("utf-8", "replace")[-3000:])
+        if decode.returncode != 0:
+            raise RuntimeError("FFmpeg video decoder failed: " + decode.stderr.read().decode("utf-8", "replace")[-3000:])
+    except Exception:
+        for process in (decode, encode):
+            if process.poll() is None:
+                process.kill()
+        raise
+    if processed == 0:
+        raise RuntimeError("No frames were processed.")
+    # Mux the original audio back without re-encoding the enhanced video.
+    mux = subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(silent), "-i", str(source),
+         "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+         "-shortest", "-movflags", "+faststart", str(output)],
+        capture_output=True, text=True
+    )
+    if mux.returncode != 0:
+        raise RuntimeError("Audio mux failed: " + mux.stderr[-3000:])
+    silent.unlink(missing_ok=True)
+    torch.cuda.synchronize()
+    return {
+        **cuda_info(),
+        "input_file": str(source), "output_file": str(output),
+        "input_bytes": source.stat().st_size, "output_bytes": output.stat().st_size,
+        "input_dimensions": [info["width"], info["height"]],
+        "output_dimensions": [out_w, out_h], "fps": info["fps"],
+        "source_duration_seconds": info["duration"], "frames_processed": processed,
+        "scale": scale, "tile": tile, "audio_preserved": info["has_audio"],
+        "processing_seconds": round(time.time() - started, 2),
+        "weights_sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+        "result": "PASS",
+        "note": "AI-generated enhancement; details are inferred, not recovered from missing source data."
+    }
+
+def image_test():
+    install_realesrgan()
+    import numpy as np
+    from PIL import Image, ImageDraw
+    upsampler, weights = load_upscaler(256)
     image = Image.new("RGB", (128, 128), (35, 48, 65))
     draw = ImageDraw.Draw(image)
     draw.rectangle((16, 16, 111, 111), outline=(240, 190, 70), width=3)
     draw.ellipse((38, 38, 90, 90), fill=(70, 160, 210), outline=(245, 245, 245), width=2)
-    draw.line((0, 127, 127, 0), fill=(230, 90, 100), width=3)
-
-    weights = "/kaggle/working/RealESRGAN_x4plus.pth"
-    if not os.path.exists(weights):
-        url = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
-        response = requests.get(url, timeout=180)
-        response.raise_for_status()
-        with open(weights, "wb") as handle:
-            handle.write(response.content)
-
-    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-    upsampler = RealESRGANer(scale=4, model_path=weights, model=model, tile=256, tile_pad=10,
-                             pre_pad=0, half=True, device=torch.device("cuda:0"))
-    input_bgr = np.array(image)[:, :, ::-1].copy()
-    torch.cuda.reset_peak_memory_stats()
+    frame = np.array(image)[:, :, ::-1].copy()
     start = time.time()
-    output_bgr, _ = upsampler.enhance(input_bgr, outscale=4)
-    elapsed = time.time() - start
-    output_path = "/kaggle/working/cloudvision_bridge_x4.png"
-    Image.fromarray(output_bgr[:, :, ::-1]).save(output_path)
-    if output_bgr.shape[:2] != (512, 512):
-        raise RuntimeError(f"Unexpected output dimensions: {output_bgr.shape}")
-    return {
-        **cuda_info(),
-        "input_size": [128, 128],
-        "output_size": [int(output_bgr.shape[1]), int(output_bgr.shape[0])],
-        "scale": 4,
-        "inference_seconds": round(elapsed, 3),
-        "peak_vram_gib": round(torch.cuda.max_memory_allocated() / 1024**3, 3),
-        "weights_sha256": hashlib.sha256(open(weights, "rb").read()).hexdigest(),
-        "output_file": output_path,
-        "result": "PASS",
-    }
+    output, _ = upsampler.enhance(frame, outscale=4)
+    result_path = WORK / "bridge_image_test_x4.png"
+    Image.fromarray(output[:, :, ::-1]).save(result_path)
+    return {**cuda_info(), "input_size": [128, 128], "output_size": [int(output.shape[1]), int(output.shape[0])],
+            "inference_seconds": round(time.time()-start, 3), "weights_sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+            "output_file": str(result_path), "result": "PASS"}
 
 ACTIONS = {
     "cuda_info": cuda_info,
-    "realesrgan_image_test": realesrgan_image_test,
+    "realesrgan_image_test": image_test,
+    "video_upscale": enhance_video,
 }
 
 def main():
-    print("[bridge] online; polling GitHub every 20 seconds.", flush=True)
+    print("[bridge] online; waiting for CloudVision jobs from GitHub.", flush=True)
+    print("[bridge] allowed actions: cuda_info, realesrgan_image_test, video_upscale", flush=True)
     print("[bridge] stop this cell with Kaggle's interrupt button.", flush=True)
     last_id = None
     while True:
         try:
             command = get_command()
             if command:
+                if not isinstance(command, dict):
+                    raise ValueError("Command must be a JSON object.")
                 command_id = str(command.get("id", ""))
                 action = str(command.get("action", ""))
                 if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
                     raise ValueError("Invalid command id")
                 if command_id != last_id:
-                    last_id = command_id
                     print(f"[bridge] received {command_id}: {action}", flush=True)
                     started = datetime.now(timezone.utc).isoformat()
                     try:
                         if action not in ACTIONS:
                             raise ValueError(f"Action not allowed: {action}")
-                        data = ACTIONS[action]()
+                        data = ACTIONS[action](command) if action == "video_upscale" else ACTIONS[action]()
                         result = {"id": command_id, "action": action, "status": "success",
                                   "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
                                   "data": data}
@@ -200,13 +329,15 @@ def main():
                         result = {"id": command_id, "action": action, "status": "error",
                                   "started_at": started, "finished_at": datetime.now(timezone.utc).isoformat(),
                                   "error": str(exc), "traceback": traceback.format_exc()[-12000:]}
+                    # Do not mark a command complete until its result is safely committed.
                     publish_result(command_id, result)
-            time.sleep(20)
+                    last_id = command_id
+            time.sleep(15)
         except KeyboardInterrupt:
             print("[bridge] stopped by user.", flush=True)
             break
         except Exception as exc:
-            print(f"[bridge] polling error: {exc}", flush=True)
+            print(f"[bridge] polling/publish error: {exc}", flush=True)
             time.sleep(30)
 
 if __name__ == "__main__":
