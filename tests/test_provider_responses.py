@@ -96,6 +96,16 @@ class ProviderRetryTests(unittest.TestCase):
     def test_numeric_retry_after_is_parsed(self):
         self.assertEqual(agent.retry_after_seconds({"Retry-After": "45"}, now=1000), 45.0)
 
+    def test_model_not_found_does_not_start_ten_minute_provider_bench(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "missing-model", 404)
+        self.assertNotIn(("GROQ", "missing-model"), agent.bench)
+
+    def test_payload_too_large_does_not_start_repeated_cooldown(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "model", 413)
+        self.assertNotIn(("GROQ", "model"), agent.bench)
+
     def test_http_date_retry_after_is_parsed(self):
         from email.utils import formatdate
         self.assertEqual(agent.retry_after_seconds({"retry-after": formatdate(1120, usegmt=True)}, now=1000), 120.0)
