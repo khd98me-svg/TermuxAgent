@@ -37,6 +37,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -1130,9 +1131,68 @@ bench = {}
 dead = set()
 
 class ApiError(Exception):
-    def __init__(self, code, text):
+    def __init__(self, code, text, headers=None):
         super().__init__(f"HTTP {code}: {text[:200]}")
         self.code, self.text = code, text
+        self.headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+
+def retry_after_seconds(headers, now=None):
+    value = (headers or {}).get("retry-after") or (headers or {}).get("Retry-After")
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value.strip()))
+    except (TypeError, ValueError):
+        try:
+            target = parsedate_to_datetime(value)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            return max(0.0, target.timestamp() - (time.time() if now is None else now))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+def _mark_failure(name, model, code, retry_after=None):
+    key = (name, model)
+    fs = fail_streak.get(key, 0) + 1
+    fail_streak[key] = fs
+    now = time.time()
+    if code == 429:
+        delay = retry_after if retry_after is not None else SHORT_COOLDOWN
+        bench[key] = now + min(max(1.0, delay), 3600.0)
+    elif code == 404:
+        bench[key] = now + BENCH_SECS
+    elif code == 0 or code in (408, 425) or 500 <= code <= 599:
+        delay = min(SHORT_COOLDOWN * (2 ** min(fs - 1, 4)), 120)
+        if fs >= BENCH_AFTER:
+            delay = max(delay, min(BENCH_SECS, 120))
+        bench[key] = now + delay
+    elif code == 413:
+        bench[key] = now + min(SHORT_COOLDOWN, 30)
+    elif code in (400, 422, 501):
+        bench.pop(key, None)
+    else:
+        bench[key] = now + SHORT_COOLDOWN
+    return fs
+
+def _provider_error_summary(error):
+    headers = error.headers
+    parts = [f"HTTP {error.code}"]
+    retry = retry_after_seconds(headers)
+    if retry is not None:
+        parts.append(f"retry-after={int(retry)}s")
+    for key in ("x-request-id", "request-id", "cf-ray"):
+        value = headers.get(key)
+        if value:
+            parts.append(f"{key}={value[:80]}")
+            break
+    try:
+        body = json.loads(error.text)
+        detail = body.get("error", {}).get("message") if isinstance(body.get("error"), dict) else body.get("message")
+        if detail:
+            parts.append(str(redact(str(detail)))[:180])
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return " | ".join(parts)
 
 def load_env():
     ENV.clear()
@@ -1281,8 +1341,15 @@ def from_openai(data):
 def _http(url, payload, headers, timeout):
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r: return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e: raise ApiError(e.code, e.read().decode(errors="replace"))
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(raw)
+            except ValueError as e:
+                raise ApiError(getattr(r, "status", 200), "Provider returned invalid JSON", dict(r.headers.items())) from e
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise ApiError(e.code, body, dict(e.headers.items()) if e.headers else {}) from e
 
 def _curl(url, payload, headers, timeout):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f: json.dump(payload, f)
@@ -1425,6 +1492,7 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
                                 post = post_openai if name in OPENAI else post_gemini
                                 resp = post_retry(lambda n=name, m=model, b=body, p=post: p(n, m, b))
                             fail_streak.pop((name, model), None)
+                            bench.pop((name, model), None)
                             record_tokens(name, resp)
                             last_model, last_used = mid, f"{name} · {model}"
                             active_name = name
@@ -1433,17 +1501,22 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
                                 if since_rotate >= ROTATE_EVERY: pending_rotate = True
                             return resp
                         except ApiError as e:
-                            errors.append(f"{name}: HTTP {e.code}")
-                            fs = _mark_failure(name, model, e.code)
-                            if e.code in (401, 402) or (e.code in (400, 403) and re.search(r"API key|API_KEY|PERMISSION_DENIED|expired|billing|invalid.*key", e.text, re.I)):
+                            detail = _provider_error_summary(e)
+                            errors.append(f"{name}: {detail}")
+                            retry_after = retry_after_seconds(e.headers)
+                            _mark_failure(name, model, e.code, retry_after)
+                            log_line(f"provider failure: {name} model={model} {detail}")
+                            if e.code in (401, 402) or (e.code in (400, 403) and re.search(r"API key|API_KEY|PERMISSION_DENIED|expired|billing|invalid.*key|unauthorized", e.text, re.I)):
                                 dead.add(name)
                                 break
-                            if e.code in (429, 413): continue
-                            if e.code == 404: bench[(name, model)] = time.time() + 600; continue
+                            if e.code in (429, 413, 404, 408, 425) or 500 <= e.code <= 599:
+                                continue
                             break
                         except NET_ERRORS as e:
-                            errors.append(f"{name}: {type(e).__name__}")
+                            detail = f"{name}: {type(e).__name__}"
+                            errors.append(detail)
                             _mark_failure(name, model, 0)
+                            log_line(f"provider network failure: {name} model={model} {type(e).__name__}")
                             break
                 if tried: break
             soonest_wait = None
