@@ -1159,17 +1159,13 @@ def _mark_failure(name, model, code, retry_after=None):
     if code == 429:
         delay = retry_after if retry_after is not None else SHORT_COOLDOWN
         bench[key] = now + min(max(1.0, delay), 3600.0)
-    elif code == 404:
-        bench[key] = now + BENCH_SECS
+    elif code in (400, 404, 413, 422, 501):
+        bench.pop(key, None)
     elif code == 0 or code in (408, 425) or 500 <= code <= 599:
         delay = min(SHORT_COOLDOWN * (2 ** min(fs - 1, 4)), 120)
         if fs >= BENCH_AFTER:
             delay = max(delay, min(BENCH_SECS, 120))
         bench[key] = now + delay
-    elif code == 413:
-        bench[key] = now + min(SHORT_COOLDOWN, 30)
-    elif code in (400, 422, 501):
-        bench.pop(key, None)
     else:
         bench[key] = now + SHORT_COOLDOWN
     return fs
@@ -1465,6 +1461,7 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
         names = names[i0:] + names[:i0]
         contents = _clean_parts(window(history))
         errors = []
+        skipped = set()
         attempts = 0
         max_attempts = 40
         while attempts < max_attempts:
@@ -1476,6 +1473,7 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
                     g_idx = GEMINI_MODELS.index(gemini_model) if gemini_model in GEMINI_MODELS else 0
                     models = ([OPENAI[name]["model"]] if name in OPENAI else GEMINI_MODELS[g_idx:])
                     for model in models:
+                        if (name, model) in skipped: continue
                         if not ignore_bench and bench.get((name, model), 0) > time.time(): continue
                         tried = True
                         mid = (name if name in OPENAI else "gemini") + ":" + model
@@ -1502,7 +1500,10 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
                             if e.code in (401, 402) or (e.code in (400, 403) and re.search(r"API key|API_KEY|PERMISSION_DENIED|expired|billing|invalid.*key|unauthorized", e.text, re.I)):
                                 dead.add(name)
                                 break
-                            if e.code in (429, 413, 404, 408, 425) or 500 <= e.code <= 599:
+                            if e.code in (400, 404, 413, 422, 501):
+                                skipped.add((name, model))
+                                continue
+                            if e.code in (429, 408, 425) or 500 <= e.code <= 599:
                                 continue
                             break
                         except NET_ERRORS as e:
@@ -1516,6 +1517,7 @@ def call_llm(history, continuation=False, no_tools=False, no_rotate=False):
             for n in names:
                 if n in dead: continue
                 for m in ([OPENAI[n]["model"]] if n in OPENAI else GEMINI_MODELS):
+                    if (n, m) in skipped: continue
                     until = bench.get((n, m), 0)
                     if until > time.time():
                         w = until - time.time()
