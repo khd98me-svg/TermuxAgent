@@ -1,0 +1,76 @@
+name: CloudVision CPU compatibility preflight
+
+on:
+  push:
+    branches:
+      - cloudvision-ci-preflight
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.16"
+          cache: pip
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install PyTorch 2.11 / TorchVision 0.26 CPU wheels
+        run: |
+          python -m pip install --upgrade pip wheel "setuptools<81"
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.11.0" "torchvision==0.26.0"
+
+      - name: Install support dependencies
+        run: |
+          python -m pip install "numpy==1.26.4" "opencv-python-headless==4.11.0.86" addict future lmdb Pillow PyYAML requests scikit-image scipy tqdm yapf cython
+
+      - name: Clone pinned upstream releases
+        run: |
+          git clone --depth 1 --branch v1.4.2 https://github.com/XPixelGroup/BasicSR.git /tmp/BasicSR
+          git clone --depth 1 --branch v0.3.0 https://github.com/xinntao/Real-ESRGAN.git /tmp/Real-ESRGAN
+
+      - name: Patch Python 3.13 version reader and install packages
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          old = """def get_version():
+              with open(version_file, 'r') as f:
+                  exec(compile(f.read(), version_file, 'exec'))
+              return locals()['__version__']"""
+          new = """def get_version():
+              namespace = {}
+              with open(version_file, 'r') as f:
+                  exec(compile(f.read(), version_file, 'exec'), namespace)
+              return namespace['__version__']"""
+          for path in [Path('/tmp/BasicSR/setup.py'), Path('/tmp/Real-ESRGAN/setup.py')]:
+              source = path.read_text()
+              if old not in source:
+                  raise SystemExit(f'Expected get_version() block not found: {path}')
+              path.write_text(source.replace(old, new, 1))
+              print('PATCHED', path)
+          PY
+          BASICSR_EXT=False python -m pip install --no-build-isolation --no-deps /tmp/BasicSR
+          python -m pip install --no-build-isolation --no-deps /tmp/Real-ESRGAN
+
+      - name: Run inference and video smoke tests
+        run: python ci/cloudvision_preflight.py
+
+      - name: Upload report and test outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudvision-cpu-preflight
+          path: |
+            cloudvision-report.json
+            cloudvision-output/
+          if-no-files-found: warn
+          retention-days: 7
