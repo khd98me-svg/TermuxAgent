@@ -1,0 +1,14 @@
+{
+  "id": "gpu-connection-check-001",
+  "action": "cuda_info",
+  "status": "success",
+  "started_at": "2026-11-19T21:27:39.211566+00:00",
+  "finished_at": "2026-11-19T21:27:44.612450+00:00",
+  "data": {
+    "torch": "2.11.0+cu130",
+    "cuda_available": true,
+    "cuda_version": "13.0",
+    "gpu": "Tesla T4",
+    "vram_gib": 14.56
+  }
+}
