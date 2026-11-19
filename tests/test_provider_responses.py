@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -163,6 +165,32 @@ class HttpErrorMetadataTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 429)
         self.assertEqual(caught.exception.headers.get("retry-after"), "17")
         self.assertEqual(caught.exception.headers.get("x-request-id"), "req-456")
+
+
+class MakeDirectoryApprovalTests(unittest.TestCase):
+    def test_directory_creation_is_refused_without_approval(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = os.path.join(root, "new-folder")
+            with patch.object(agent, "ROOT", root), \\
+                 patch.object(agent, "ask", return_value=False) as ask, \\
+                 patch.object(agent, "schedule_repo_map_refresh"), \\
+                 patch.object(agent, "journal", []):
+                result = agent.t_make_dir("new-folder")
+            ask.assert_called_once()
+            self.assertIn("denied", result.lower())
+            self.assertFalse(os.path.exists(target))
+
+    def test_directory_creation_proceeds_after_approval(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = os.path.join(root, "new-folder")
+            with patch.object(agent, "ROOT", root), \\
+                 patch.object(agent, "ask", return_value=True) as ask, \\
+                 patch.object(agent, "schedule_repo_map_refresh"), \\
+                 patch.object(agent, "journal", []):
+                result = agent.t_make_dir("new-folder")
+            ask.assert_called_once()
+            self.assertIn("Created", result)
+            self.assertTrue(os.path.isdir(target))
 
 
 if __name__ == "__main__":
