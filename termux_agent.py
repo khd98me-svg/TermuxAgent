@@ -1424,14 +1424,6 @@ def post_retry(fn):
         if STOP.wait(1): raise KeyboardInterrupt
         return interruptible(fn)
 
-def _mark_failure(name, model, code):
-    key = (name, model)
-    fs = fail_streak.get(key, 0) + 1
-    fail_streak[key] = fs
-    if fs >= BENCH_AFTER: bench[key] = time.time() + BENCH_SECS
-    else: bench[key] = time.time() + SHORT_COOLDOWN
-    return fs
-
 def record_tokens(name, resp):
     u = resp.get("usageMetadata") or resp.get("usage") or {}
     n = u.get("totalTokenCount") or u.get("total_tokens") or 0
