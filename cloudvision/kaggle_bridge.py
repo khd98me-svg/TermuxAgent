@@ -178,7 +178,6 @@ def probe_video(path):
     }
 
 def enhance_video(command):
-    install_realesrgan()
     import numpy as np
     import torch
 
@@ -195,15 +194,17 @@ def enhance_video(command):
         raise ValueError("scale must be 2 or 4.")
     if tile not in (128, 256, 384, 512, 0):
         raise ValueError("tile must be 128, 256, 384, 512, or 0 (no tiling).")
-    if max_frames is not None and (not isinstance(max_frames, int) or not 1 <= max_frames <= 100000):
+    if max_frames is not None and (not isinstance(max_frames, int) or isinstance(max_frames, bool) or not 1 <= max_frames <= 100000):
         raise ValueError("max_frames must be an integer from 1 to 100000.")
-    if not isinstance(crf, int) or not 15 <= crf <= 28:
+    if not isinstance(crf, int) or isinstance(crf, bool) or not 15 <= crf <= 28:
         raise ValueError("crf must be an integer from 15 to 28.")
     require_ffmpeg()
     info = probe_video(source)
     out_w, out_h = info["width"] * scale, info["height"] * scale
     if out_w * out_h > 3840 * 2160:
         raise ValueError(f"Requested output {out_w}x{out_h} exceeds the 4K pixel budget. Use scale=2 or a smaller source.")
+    # Validate the command and source before installing the AI stack.
+    install_realesrgan()
     upsampler, weights = load_upscaler(tile)
     command_id = command["id"]
     output = WORK / f"{command_id}_x{scale}.mp4"
@@ -259,12 +260,16 @@ def enhance_video(command):
     if processed == 0:
         raise RuntimeError("No frames were processed.")
     # Mux the original audio back without re-encoding the enhanced video.
-    mux = subprocess.run(
-        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(silent), "-i", str(source),
-         "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-         "-movflags", "+faststart", str(output)],
-        capture_output=True, text=True
-    )
+    mux_args = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(silent), "-i", str(source),
+        "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart"
+    ]
+    # A frame-limited run must trim the original audio to the shorter video.
+    if max_frames is not None:
+        mux_args.append("-shortest")
+    mux_args.append(str(output))
+    mux = subprocess.run(mux_args, capture_output=True, text=True)
     if mux.returncode != 0:
         raise RuntimeError("Audio mux failed: " + mux.stderr[-3000:])
     silent.unlink(missing_ok=True)
