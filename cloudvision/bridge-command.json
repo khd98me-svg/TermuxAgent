@@ -1,4 +1,9 @@
 {
-  "id": "realesrgan-smoke-20261120-001",
-  "action": "realesrgan_image_test"
+  "id": "youtube-smoke-20261120-001",
+  "action": "video_upscale",
+  "source_url": "https://youtu.be/R3GfuzLMPkA?si=F3AHmwOVAKhgIMUD",
+  "scale": 2,
+  "tile": 256,
+  "crf": 18,
+  "max_frames": 24
 }
