@@ -1061,7 +1061,10 @@ def execute(call):
     fn = TOOLS.get(name)
     label = str(args.get("path") or args.get("command") or args.get("pattern") or args.get("query") or args.get("url") or args.get("file_path") or args.get("target") or args.get("name") or "")
     out("tool", name=name, label=label[:60])
-    if not fn: return f"Error: unknown tool: {name}"
+    if not fn:
+        result = f"Error: unknown tool: {name}"
+        out("err", text=result)
+        return result
     try: result = trunc(redact(str(fn(**args))))
     except Exception as e: result = f"Error: {type(e).__name__}: {e}"
     if name in UNTRUSTED_TOOLS:
