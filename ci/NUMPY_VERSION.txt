@@ -1,0 +1,2 @@
+2.3.5
+Selected for Python 3.13 wheels in the CloudVision compatibility preflight.
