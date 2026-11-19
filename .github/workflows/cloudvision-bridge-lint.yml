@@ -1,0 +1,23 @@
+name: CloudVision bridge validation
+
+on:
+  push:
+    branches:
+      - cloudvision-kaggle-bridge
+    paths:
+      - "cloudvision/kaggle_bridge.py"
+      - "cloudvision/kaggle_github_bridge.ipynb"
+      - ".github/workflows/cloudvision-bridge-lint.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile bridge
+        run: python -m py_compile cloudvision/kaggle_bridge.py
+      - name: Validate Kaggle notebook JSON
+        run: python -c "import json; n=json.load(open('cloudvision/kaggle_github_bridge.ipynb')); assert n['nbformat']==4; assert any(c['cell_type']=='code' for c in n['cells']); print('Notebook JSON OK')"
