@@ -524,6 +524,8 @@ def t_make_dir(path):
     if DRY_RUN:
         return f"DRY RUN: would create {path}"
     p = safe(path)
+    if not ask(f"Create directory {path}", "write", f"Create: {path}"):
+        return "User denied this directory creation."
     os.makedirs(p, exist_ok=True)
     journal.append(("restore", p, None))
     schedule_repo_map_refresh()
