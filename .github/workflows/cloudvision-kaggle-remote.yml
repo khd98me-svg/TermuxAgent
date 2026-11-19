@@ -164,3 +164,22 @@ jobs:
           path: cloudvision-output/**
           if-no-files-found: error
           retention-days: 7
+
+      - name: Validate downloaded CloudVision result
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("cloudvision-output")
+          reports = sorted(root.rglob("*_result.json"))
+          if not reports:
+              raise SystemExit("No CloudVision result report was downloaded from Kaggle.")
+          report = json.loads(reports[-1].read_text(encoding="utf-8"))
+          print(json.dumps(report, ensure_ascii=False, indent=2))
+          if report.get("status") != "success":
+              raise SystemExit("CloudVision processing failed; inspect the report printed above and download the uploaded artifact.")
+          videos = list(root.rglob("*.mp4"))
+          if not videos:
+              raise SystemExit("The worker reported success but no MP4 was downloaded.")
+          print("Verified MP4 outputs:", [str(p) for p in videos])
+          PY
