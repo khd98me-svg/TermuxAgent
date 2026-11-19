@@ -80,5 +80,80 @@ class EmptyTurnTests(unittest.TestCase):
         self.assertTrue(any("no candidates" in call.kwargs.get("text", "") for call in output.call_args_list))
 
 
+class ProviderRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.old_bench = dict(agent.bench)
+        self.old_streak = dict(agent.fail_streak)
+        agent.bench.clear()
+        agent.fail_streak.clear()
+
+    def tearDown(self):
+        agent.bench.clear()
+        agent.bench.update(self.old_bench)
+        agent.fail_streak.clear()
+        agent.fail_streak.update(self.old_streak)
+
+    def test_numeric_retry_after_is_parsed(self):
+        self.assertEqual(agent.retry_after_seconds({"Retry-After": "45"}, now=1000), 45.0)
+
+    def test_http_date_retry_after_is_parsed(self):
+        from email.utils import formatdate
+        self.assertEqual(agent.retry_after_seconds({"retry-after": formatdate(1120, usegmt=True)}, now=1000), 120.0)
+
+    def test_429_uses_server_retry_after_instead_of_generic_bench(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "model", 429, 90)
+        self.assertEqual(agent.bench[("GROQ", "model")], 1090)
+
+    def test_429_without_header_uses_short_cooldown(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "model", 429)
+        self.assertEqual(agent.bench[("GROQ", "model")], 1000 + agent.SHORT_COOLDOWN)
+
+    def test_repeated_server_errors_use_bounded_backoff_not_ten_minutes(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "model", 503)
+            agent._mark_failure("GROQ", "model", 503)
+        self.assertLessEqual(agent.bench[("GROQ", "model")] - 1000, 120)
+
+    def test_bad_request_does_not_bench_provider(self):
+        with patch.object(agent.time, "time", return_value=1000):
+            agent._mark_failure("GROQ", "model", 400)
+        self.assertNotIn(("GROQ", "model"), agent.bench)
+
+    def test_successful_retry_clears_old_bench(self):
+        agent.bench[("GROQ", "model")] = 9999999999
+        agent.fail_streak[("GROQ", "model")] = 2
+        agent.bench.pop(("GROQ", "model"), None)
+        agent.fail_streak.pop(("GROQ", "model"), None)
+        self.assertNotIn(("GROQ", "model"), agent.bench)
+        self.assertNotIn(("GROQ", "model"), agent.fail_streak)
+
+    def test_provider_error_summary_includes_request_id_without_secret_headers(self):
+        error = agent.ApiError(429, '{"error":{"message":"rate limited"}}', {
+            "Retry-After": "30", "x-request-id": "req-123", "Authorization": "Bearer do-not-print"
+        })
+        summary = agent._provider_error_summary(error)
+        self.assertIn("retry-after=30s", summary)
+        self.assertIn("x-request-id=req-123", summary)
+        self.assertNotIn("do-not-print", summary)
+
+
+class HttpErrorMetadataTests(unittest.TestCase):
+    def test_http_error_preserves_response_headers(self):
+        import io
+        error = agent.urllib.error.HTTPError(
+            "https://example.invalid", 429, "Too Many Requests",
+            {"Retry-After": "17", "x-request-id": "req-456"},
+            io.BytesIO(b'{"error":"limited"}')
+        )
+        with patch.object(agent.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(agent.ApiError) as caught:
+                agent._http("https://example.invalid", {}, {}, 1)
+        self.assertEqual(caught.exception.code, 429)
+        self.assertEqual(caught.exception.headers.get("retry-after"), "17")
+        self.assertEqual(caught.exception.headers.get("x-request-id"), "req-456")
+
+
 if __name__ == "__main__":
     unittest.main()
