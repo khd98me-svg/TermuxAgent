@@ -223,7 +223,9 @@ You can edit `~/.config/termux_agent/config.json` to adjust runtime limits:
 
 ## Writing Plugins
 
-Drop any `.py` file (not starting with `_`) into `~/.config/termux_agent/plugins/`. On startup, `load_plugins()` imports each file and merges its `TOOLS` dictionary and `DECLARATIONS` list into the agent.
+Drop any `.py` file (not starting with `_`) into `~/.config/termux_agent/plugins/`. On startup, `load_plugins()` imports each file and registers its callable tools and matching declarations. Plugin names that collide with built-in tools are rejected and cannot replace built-in safety checks.
+
+**Trust boundary:** plugins are trusted Python code, not sandboxed extensions. Importing a plugin executes its top-level code inside the agent process with the agent's OS permissions. Only built-in tool functions apply the agent's path checks and approval flow; a plugin can access files, network, and process APIs directly. Install only code you have reviewed.
 
 Minimal plugin example (`~/.config/termux_agent/plugins/word_count.py`):
 
