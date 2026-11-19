@@ -175,6 +175,7 @@ def probe_video(path):
     }
 
 def enhance_video(command):
+    install_realesrgan()
     import numpy as np
     import torch
 
@@ -204,9 +205,12 @@ def enhance_video(command):
     command_id = command["id"]
     output = WORK / f"{command_id}_x{scale}.mp4"
     silent = WORK / f"{command_id}_video_only.mp4"
+    decode_args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source), "-map", "0:v:0"]
+    if max_frames is not None:
+        decode_args += ["-frames:v", str(max_frames)]
+    decode_args += ["-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
     decode = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source), "-map", "0:v:0",
-         "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+        decode_args,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     encode = subprocess.Popen(
@@ -255,7 +259,7 @@ def enhance_video(command):
     mux = subprocess.run(
         ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(silent), "-i", str(source),
          "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-         "-shortest", "-movflags", "+faststart", str(output)],
+         "-movflags", "+faststart", str(output)],
         capture_output=True, text=True
     )
     if mux.returncode != 0:
