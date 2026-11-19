@@ -1044,9 +1044,24 @@ def load_plugins():
             spec.loader.exec_module(mod)
             p_tools = dict(getattr(mod, "TOOLS", {}) or {})
             p_decls = list(getattr(mod, "DECLARATIONS", []) or [])
-            TOOLS.update(p_tools)
-            DECLARATIONS.extend(p_decls)
-            loaded += 1
+            accepted = {}
+            for name, fn in p_tools.items():
+                if not isinstance(name, str) or not name or not callable(fn):
+                    log_line(f"plugin {f}: ignored invalid tool registration")
+                    continue
+                if name in TOOLS:
+                    log_line(f"plugin {f}: rejected reserved tool name {name}")
+                    continue
+                accepted[name] = fn
+            accepted_names = set(accepted)
+            accepted_decls = [
+                d for d in p_decls
+                if isinstance(d, dict) and d.get("name") in accepted_names
+            ]
+            TOOLS.update(accepted)
+            DECLARATIONS.extend(accepted_decls)
+            if accepted:
+                loaded += 1
         except Exception as e:
             log_line(f"plugin {f} failed: {e}")
     return loaded
