@@ -50,6 +50,9 @@ def get_command():
     raw = base64.b64decode(item["content"]).decode("utf-8")
     return json.loads(raw)
 
+def result_already_published(command_id):
+    return github_get(f"contents/{RESULT_DIR}/{command_id}.json") is not None
+
 def publish_result(command_id, payload):
     path = f"{RESULT_DIR}/{command_id}.json"
     body = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -320,6 +323,11 @@ def main():
                 if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", command_id):
                     raise ValueError("Invalid command id")
                 if command_id != last_id:
+                    if result_already_published(command_id):
+                        print(f"[bridge] {command_id} already has a result; skipping duplicate.", flush=True)
+                        last_id = command_id
+                        time.sleep(15)
+                        continue
                     print(f"[bridge] received {command_id}: {action}", flush=True)
                     started = datetime.now(timezone.utc).isoformat()
                     try:
