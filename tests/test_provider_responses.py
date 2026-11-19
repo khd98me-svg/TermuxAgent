@@ -237,7 +237,34 @@ class ToolCallSafetyTests(unittest.TestCase):
                  patch.object(agent, "save_session"):
                 agent.run_turn("stop during tool batch")
             self.assertEqual(calls, ["first_tool"])
-            self.assertEqual(agent.history, [])
+            self.assertEqual(agent.history[0]["parts"][0]["text"], "stop during tool batch")
+            self.assertIn("Some actions may already have completed", agent.history[-1]["parts"][0]["text"])
+        finally:
+            agent.STOP.clear()
+            agent.history.clear()
+
+    def test_interrupt_emits_stopped_event_and_preserves_auditable_history(self):
+        agent.history.clear()
+        agent.STOP.clear()
+        response = {"candidates": [{
+            "content": {"role": "model", "parts": [
+                {"functionCall": {"name": "one_tool", "args": {}}},
+                {"functionCall": {"name": "two_tool", "args": {}}},
+            ]}
+        }]}
+        events = []
+        def fake_execute(call):
+            agent.STOP.set()
+            return "completed"
+        try:
+            with patch.object(agent, "call_llm", return_value=response), \
+                 patch.object(agent, "execute", side_effect=fake_execute), \
+                 patch.object(agent, "out", side_effect=lambda kind, **kw: events.append((kind, kw))), \
+                 patch.object(agent, "save_session"):
+                agent.run_turn("retain interrupted request")
+            self.assertIn(("stopped", unittest.mock.ANY), events)
+            self.assertEqual(agent.history[0]["parts"][0]["text"], "retain interrupted request")
+            self.assertEqual(agent.history[-1]["role"], "model")
         finally:
             agent.STOP.clear()
             agent.history.clear()
