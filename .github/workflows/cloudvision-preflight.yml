@@ -17,7 +17,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13.16"
-          cache: pip
 
       - name: Install FFmpeg
         run: |
@@ -31,7 +30,7 @@ jobs:
 
       - name: Install support dependencies
         run: |
-          python -m pip install "numpy==1.26.4" "opencv-python-headless==4.11.0.86" addict future lmdb Pillow PyYAML requests scikit-image scipy tqdm yapf cython
+          python -m pip install "numpy==1.26.4" "opencv-python-headless==4.11.0.86" addict future lmdb Pillow PyYAML requests scikit-image scipy tqdm yapf cython tensorboard
 
       - name: Clone pinned upstream releases
         run: |
