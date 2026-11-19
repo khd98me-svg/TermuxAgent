@@ -39,11 +39,11 @@ jobs:
       - name: Validate required Kaggle credentials
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
         run: |
           test -n "$KAGGLE_USERNAME" || (echo "Missing repository secret KAGGLE_USERNAME" && exit 1)
-          test -n "$KAGGLE_KEY" || (echo "Missing repository secret KAGGLE_KEY" && exit 1)
+          test -n "$KAGGLE_API_TOKEN" || (echo "Missing repository secret KAGGLE_KEY (Kaggle API token)" && exit 1)
           test -n "$KAGGLE_KERNEL_ID" || (echo "Missing repository secret KAGGLE_KERNEL_ID" && exit 1)
 
       - name: Create unique GitHub job command
@@ -80,10 +80,10 @@ jobs:
       - name: Install Kaggle CLI and prepare notebook package
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
         run: |
-          python -m pip install --quiet kaggle
+          python -m pip install --quiet --upgrade kaggle
           mkdir -p cloudvision/remote-kernel
           cp cloudvision/kaggle_github_bridge.ipynb cloudvision/remote-kernel/
           python - <<'PY'
@@ -108,14 +108,14 @@ jobs:
       - name: Launch the existing Kaggle GPU notebook
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
         run: |
           kaggle kernels push -p cloudvision/remote-kernel
 
       - name: Wait for Kaggle execution
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
         run: |
           for attempt in $(seq 1 90); do
@@ -136,7 +136,7 @@ jobs:
       - name: Download Kaggle outputs
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_KEY }}
           KAGGLE_KERNEL_ID: ${{ secrets.KAGGLE_KERNEL_ID }}
         run: |
           mkdir -p cloudvision-output
