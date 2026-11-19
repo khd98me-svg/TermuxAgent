@@ -90,7 +90,7 @@ jobs:
           import json, os
           metadata = {
               "id": os.environ["KAGGLE_KERNEL_ID"],
-              "title": "CloudVision GPU Worker",
+              "title": os.environ["KAGGLE_KERNEL_ID"].split("/", 1)[1],
               "code_file": "kaggle_github_bridge.ipynb",
               "language": "python",
               "kernel_type": "notebook",
