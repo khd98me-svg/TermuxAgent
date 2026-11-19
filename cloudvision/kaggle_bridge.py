@@ -231,8 +231,8 @@ def enhance_video(command):
     tile = command.get("tile", 256)
     max_frames = command.get("max_frames")
     crf = command.get("crf", 18)
-    if scale not in (2, 4):
-        raise ValueError("scale must be 2 or 4.")
+    if scale not in (1, 2, 4):
+        raise ValueError("scale must be 1, 2, or 4.")
     if tile not in (128, 256, 384, 512, 0):
         raise ValueError("tile must be 128, 256, 384, 512, or 0 (no tiling).")
     if max_frames is not None and (not isinstance(max_frames, int) or isinstance(max_frames, bool) or not 1 <= max_frames <= 100000):
