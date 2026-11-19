@@ -1249,11 +1249,14 @@ def openai_tools():
     return res
 
 def from_openai(data):
-    ch = (data.get("choices") or [{}])[0]
+    choices = data.get("choices") or []
+    ch = choices[0] if choices else {}
     msg = ch.get("message") or {}
     c, parts = msg.get("content"), []
     if isinstance(c, list): c = "".join(x.get("text", "") for x in c if isinstance(x, dict))
     if c: parts.append({"text": c})
+    refusal = msg.get("refusal")
+    if refusal and not c: parts.append({"text": str(refusal)})
     for tc in msg.get("tool_calls") or []:
         f = tc.get("function", {})
         raw_args = f.get("arguments")
@@ -1263,7 +1266,15 @@ def from_openai(data):
             try: args = json.loads(raw_args or "{}")
             except (ValueError, TypeError): args = {}
         parts.append({"functionCall": {"name": (f.get("name") or "").split("<|")[0].strip(), "args": args}})
-    out = {"candidates": [{"content": {"role": "model", "parts": parts}, "finishReason": ch.get("finish_reason")}]}
+    out = {"candidates": ([{"content": {"role": "model", "parts": parts}, "finishReason": ch.get("finish_reason")}] if choices else [])}
+    out["providerDiagnostics"] = {
+        "choice_count": len(choices),
+        "finish_reason": ch.get("finish_reason"),
+        "reasoning_present": bool(msg.get("reasoning")),
+        "refusal_present": bool(refusal),
+        "content_present": bool(c),
+        "tool_calls_count": len(msg.get("tool_calls") or []),
+    }
     if isinstance(data.get("usage"), dict): out["usageMetadata"] = {"totalTokenCount": data["usage"].get("total_tokens", 0)}
     return out
 
@@ -1768,8 +1779,30 @@ def run_turn(user_text):
             if STOP.is_set(): raise KeyboardInterrupt
             resp = call_llm(history, continuation=(step > 0))
             cands = resp.get("candidates") or []
-            if not cands or "content" not in cands[0] or not cands[0]["content"].get("parts"): return
-            content = cands[0]["content"]
+            if not cands:
+                diagnostic = "The provider returned no candidates; the request completed without a usable answer."
+                history.append({"role": "model", "parts": [{"text": diagnostic}]})
+                out("err", text=diagnostic)
+                log_line("empty provider response: no candidates")
+                return
+            content = cands[0].get("content") or {}
+            parts = content.get("parts") or []
+            if not parts:
+                details = resp.get("providerDiagnostics") or {}
+                finish = details.get("finish_reason") or cands[0].get("finishReason")
+                if details.get("reasoning_present"):
+                    diagnostic = "The model returned reasoning but no user-visible answer or tool call."
+                elif finish == "length":
+                    diagnostic = "The model response ended at the output limit without a user-visible answer."
+                elif details.get("refusal_present"):
+                    diagnostic = "The model returned a refusal that could not be displayed."
+                else:
+                    diagnostic = "The provider returned an empty response with no user-visible text or tool call."
+                if finish: diagnostic += f" (finish_reason={finish})"
+                history.append({"role": "model", "parts": [{"text": diagnostic}]})
+                out("err", text=diagnostic)
+                log_line("empty provider response: " + diagnostic)
+                return
             content.setdefault("role", "model")
             history.append(content)
             parts = content["parts"]
