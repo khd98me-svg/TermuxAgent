@@ -1,8 +1,8 @@
 {
-  "id": "youtube-smoke-20261120-001",
+  "id": "youtube-smoke-20261120-002",
   "action": "video_upscale",
   "source_url": "https://youtu.be/R3GfuzLMPkA?si=F3AHmwOVAKhgIMUD",
-  "scale": 2,
+  "scale": 1,
   "tile": 256,
   "crf": 18,
   "max_frames": 24
